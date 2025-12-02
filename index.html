@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kindle Clippings Viewer</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Smooth scrolling for the whole page */
+        html {
+            scroll-behavior: smooth;
+        }
+        body {
+            -webkit-font-smoothing: antialiased;
+        }
+        /* Hide scrollbar for cleaner look in some browsers */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans min-h-screen p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6" id="app">
+        
+        <!-- Header Section -->
+        <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">Kindle Clippings Viewer</h1>
+            <p class="text-gray-500 mb-6">
+                Upload your <code class="bg-gray-100 px-1 py-0.5 rounded text-sm">My Clippings.txt</code> file to view.
+                <br/>
+                <span class="text-xs text-gray-400 mt-2 block">
+                    Keyboard Shortcuts: 
+                    <span class="mx-1 px-1 bg-gray-100 rounded border">Page Up/Down</span> (Next/Prev Book) 
+                    <span class="mx-1 px-1 bg-gray-100 rounded border">Arrow Up/Down</span> (Next/Prev Clipping)
+                    <span class="mx-1 px-1 bg-gray-100 rounded border">Enter</span> (Expand/Collapse Book)
+                    <span class="mx-1 px-1 bg-gray-100 rounded border">Home/End</span> (Top/Bottom)
+                </span>
+            </p>
+
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <label class="flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg cursor-pointer transition-colors shadow-sm w-full sm:w-auto">
+                    <i data-lucide="upload" width="20"></i>
+                    <span id="file-label">Select File</span>
+                    <input type="file" accept=".txt" id="file-input" class="hidden" />
+                </label>
+                <span id="file-name-display" class="text-sm text-gray-600 font-medium"></span>
+                <span id="processing-indicator" class="text-sm text-blue-600 animate-pulse hidden">Processing...</span>
+            </div>
+            
+            <div id="error-message" class="mt-4 p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-2 border border-red-100 hidden">
+                <i data-lucide="alert-circle" width="20"></i>
+                <span id="error-text"></span>
+            </div>
+        </div>
+
+        <!-- Controls & Stats -->
+        <div id="controls-area" class="flex justify-between items-center text-sm text-gray-600 px-1 hidden">
+            <span class="font-medium text-gray-800" id="stats-display">
+                <!-- Populated by JS -->
+            </span>
+            <div class="space-x-4">
+                <button onclick="app.toggleAll(true)" class="hover:text-blue-600 transition-colors">Expand All</button>
+                <button onclick="app.toggleAll(false)" class="hover:text-blue-600 transition-colors">Collapse All</button>
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="text-center py-20 bg-white rounded-xl border border-dashed border-gray-300">
+            <div class="mx-auto text-gray-300 mb-4 flex justify-center">
+                <i data-lucide="book" width="48" height="48"></i>
+            </div>
+            <p class="text-gray-500 font-medium">No clippings loaded yet.</p>
+        </div>
+
+        <!-- Book List Container -->
+        <div id="book-list" class="space-y-4"></div>
+
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded shadow-lg transition-opacity duration-300 opacity-0 pointer-events-none">
+        Copied to clipboard
+    </div>
+
+    <script>
+        // --- Application Logic ---
+        
+        const app = {
+            state: {
+                parsedBooks: [],
+                expandedBooks: new Set(),
+                activeIndex: { book: 0, clip: -1 },
+                fileName: null,
+            },
+
+            init() {
+                // Event Listeners
+                document.getElementById('file-input').addEventListener('change', this.handleFileUpload.bind(this));
+                document.addEventListener('keydown', this.handleKeyDown.bind(this));
+                
+                // Initial Icon Render
+                lucide.createIcons();
+            },
+
+            // --- Parsing Logic ---
+
+            parseClippings(text) {
+                try {
+                    const cleanText = text.replace(/^\uFEFF/, '');
+                    const entries = cleanText.split('==========');
+                    const booksMap = new Map();
+
+                    entries.forEach((entry) => {
+                        const lines = entry.trim().split(/\r\n|\r|\n/);
+                        if (lines.length < 2) return;
+
+                        const titleLine = lines[0].trim();
+                        let title = titleLine;
+                        let author = 'Unknown Author';
+                        
+                        const authorMatch = titleLine.match(/^(.*)\s+\(([^)]+)\)$/);
+                        if (authorMatch) {
+                            title = authorMatch[1].trim();
+                            author = authorMatch[2].trim();
+                        }
+
+                        const metaLine = lines[1].trim();
+                        const pageMatch = metaLine.match(/page\s+(\d+)/i);
+                        const locationMatch = metaLine.match(/Location\s+(\d+)(-(\d+))?/i);
+                        const dateMatch = metaLine.match(/Added on\s+(.+)$/i);
+                        const typeMatch = metaLine.match(/Your\s+(Highlight|Note|Bookmark)/i);
+
+                        const contentLines = lines.slice(2);
+                        const content = contentLines.join('\n').trim();
+
+                        if (!content && !typeMatch?.[1]?.includes('Bookmark')) return;
+
+                        const clipping = {
+                            page: pageMatch ? parseInt(pageMatch[1], 10) : null,
+                            locationStart: locationMatch ? parseInt(locationMatch[1], 10) : 0,
+                            locationEnd: locationMatch && locationMatch[3] ? parseInt(locationMatch[3], 10) : (locationMatch ? parseInt(locationMatch[1], 10) : 0),
+                            locationString: locationMatch ? (locationMatch[3] ? `${locationMatch[1]}-${locationMatch[3]}` : locationMatch[1]) : '',
+                            dateStr: dateMatch ? dateMatch[1] : '',
+                            dateObj: dateMatch ? new Date(dateMatch[1]) : new Date(0),
+                            type: typeMatch ? typeMatch[1] : 'Unknown',
+                            content: content
+                        };
+
+                        const key = `${title} (${author})`;
+                        
+                        if (!booksMap.has(key)) {
+                            booksMap.set(key, { title, author, id: key, clippings: [] });
+                        }
+                        booksMap.get(key).clippings.push(clipping);
+                    });
+
+                    // Sort Books
+                    const sortedBooks = Array.from(booksMap.values()).sort((a, b) => {
+                        const authorDiff = a.author.localeCompare(b.author);
+                        if (authorDiff !== 0) return authorDiff;
+                        return a.title.localeCompare(b.title);
+                    });
+
+                    // Sort & Dedupe Clippings
+                    sortedBooks.forEach(book => {
+                        book.clippings.sort((a, b) => {
+                            if (a.locationStart !== b.locationStart) return a.locationStart - b.locationStart;
+                            return a.dateObj - b.dateObj;
+                        });
+
+                        const filtered = [];
+                        for (const clip of book.clippings) {
+                            if (filtered.length === 0) {
+                                filtered.push(clip);
+                                continue;
+                            }
+                            const prevClip = filtered[filtered.length - 1];
+                            const isNearby = Math.abs(clip.locationStart - prevClip.locationStart) < 100;
+                            
+                            if (isNearby && clip.content && prevClip.content) {
+                                if (prevClip.content.includes(clip.content)) continue;
+                                if (clip.content.includes(prevClip.content)) {
+                                    filtered[filtered.length - 1] = clip;
+                                    continue;
+                                }
+                            }
+                            filtered.push(clip);
+                        }
+                        book.clippings = filtered;
+                    });
+
+                    this.state.parsedBooks = sortedBooks;
+                    this.state.activeIndex = { book: 0, clip: -1 };
+                    this.updateUI();
+                    
+                    document.getElementById('error-message').classList.add('hidden');
+                } catch (err) {
+                    console.error(err);
+                    const errorEl = document.getElementById('error-message');
+                    document.getElementById('error-text').textContent = "Failed to parse the file. Please ensure it's a valid 'My Clippings.txt' file.";
+                    errorEl.classList.remove('hidden');
+                }
+            },
+
+            handleFileUpload(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                document.getElementById('processing-indicator').classList.remove('hidden');
+                this.state.fileName = file.name;
+                document.getElementById('file-label').textContent = 'Change File';
+                document.getElementById('file-name-display').textContent = `Loaded: ${file.name}`;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    this.parseClippings(e.target.result);
+                    document.getElementById('processing-indicator').classList.add('hidden');
+                };
+                reader.readAsText(file);
+            },
+
+            // --- Rendering ---
+
+            updateUI() {
+                const { parsedBooks, expandedBooks, activeIndex } = this.state;
+                const listContainer = document.getElementById('book-list');
+                const controlsArea = document.getElementById('controls-area');
+                const emptyState = document.getElementById('empty-state');
+                const statsDisplay = document.getElementById('stats-display');
+
+                if (parsedBooks.length === 0) {
+                    listContainer.innerHTML = '';
+                    controlsArea.classList.add('hidden');
+                    emptyState.classList.remove('hidden');
+                    return;
+                }
+
+                controlsArea.classList.remove('hidden');
+                emptyState.classList.add('hidden');
+
+                const totalClippings = parsedBooks.reduce((acc, b) => acc + b.clippings.length, 0);
+                statsDisplay.innerHTML = `Found ${parsedBooks.length} Books <span class="text-gray-400 mx-2">|</span> ${totalClippings} Clippings`;
+
+                // Render List
+                let html = '';
+                parsedBooks.forEach((book, index) => {
+                    const isExpanded = expandedBooks.has(book.id);
+                    const isBookActive = activeIndex.book === index;
+                    const bookActiveBorder = (isBookActive && activeIndex.clip === -1) 
+                        ? 'ring-2 ring-blue-500 border-blue-500' 
+                        : 'border-gray-200';
+
+                    html += `
+                        <div id="book-${index}" class="bg-white rounded-xl shadow-sm border transition-shadow hover:shadow-md ${bookActiveBorder}">
+                            <!-- Header -->
+                            <div 
+                                id="header-${index}"
+                                onclick="app.handleHeaderClick('${book.id}', ${index})"
+                                class="sticky top-0 z-10 w-full flex items-center justify-between p-5 text-left bg-white hover:bg-gray-50 transition-colors cursor-pointer rounded-t-xl border-b border-gray-200 shadow-sm"
+                            >
+                                <!-- FIXED: Added min-w-0 to allow truncation on long titles -->
+                                <div class="flex items-start gap-4 flex-1 min-w-0">
+                                    <div class="p-2 rounded-lg ${isExpanded ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'}">
+                                        <i data-lucide="book" width="24" height="24"></i>
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <h2 class="text-lg font-bold text-gray-900 leading-tight mb-1 truncate" title="${this.escapeHtml(book.title)}">${this.escapeHtml(book.title)}</h2>
+                                        <p class="text-sm text-gray-500 font-medium truncate">${this.escapeHtml(book.author)}</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="flex items-center gap-3 md:gap-4 shrink-0 pl-4">
+                                    <div class="flex items-center gap-1">
+                                        <button onclick="app.handleCopy(event, ${index})" class="p-2 hover:bg-gray-100 text-gray-500 hover:text-blue-600 rounded-lg transition-colors" title="Copy">
+                                            <i data-lucide="copy" width="18"></i>
+                                        </button>
+                                        <button onclick="app.handleDownload(event, ${index})" class="p-2 hover:bg-gray-100 text-gray-500 hover:text-blue-600 rounded-lg transition-colors" title="Download">
+                                            <i data-lucide="download" width="18"></i>
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="h-6 w-px bg-gray-200 hidden sm:block"></div>
+
+                                    <div class="flex items-center bg-white border border-gray-200 rounded-lg p-1 shadow-sm" onclick="event.stopPropagation()">
+                                        <button onclick="app.manualScrollToBook(${index - 1})" ${index === 0 ? 'disabled' : ''} class="p-1 hover:bg-gray-100 text-gray-600 rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                                            <i data-lucide="arrow-up" width="16"></i>
+                                        </button>
+                                        <div class="w-px h-4 bg-gray-200 mx-1"></div>
+                                        <button onclick="app.manualScrollToBook(${index + 1})" ${index === parsedBooks.length - 1 ? 'disabled' : ''} class="p-1 hover:bg-gray-100 text-gray-600 rounded disabled:opacity-30 disabled:hover:bg-transparent">
+                                            <i data-lucide="arrow-down" width="16"></i>
+                                        </button>
+                                    </div>
+
+                                    <div onclick="app.handleChevronClick(event, '${book.id}')" class="flex items-center cursor-pointer p-2 rounded-lg hover:bg-gray-100">
+                                        <span class="text-xs font-semibold bg-gray-100 text-gray-600 px-3 py-1 rounded-full whitespace-nowrap hidden lg:inline-block mr-2">
+                                            ${book.clippings.length} clips
+                                        </span>
+                                        <i data-lucide="${isExpanded ? 'chevron-down' : 'chevron-right'}" width="20" class="text-gray-400"></i>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Clippings -->
+                            ${isExpanded ? `<div class="bg-white rounded-b-xl overflow-hidden">
+                                ${book.clippings.map((clip, clipIndex) => this.renderClipping(clip, index, clipIndex)).join('')}
+                            </div>` : ''}
+                        </div>
+                    `;
+                });
+
+                listContainer.innerHTML = html;
+                lucide.createIcons();
+            },
+
+            renderClipping(clip, bookIdx, clipIdx) {
+                const isLimitReached = clip.content.includes('<You have reached the clipping limit');
+                const isActive = this.state.activeIndex.book === bookIdx && this.state.activeIndex.clip === clipIdx;
+                
+                const typeColor = clip.type === 'Highlight' ? 'bg-yellow-100 text-yellow-700' : 
+                                  clip.type === 'Note' ? 'bg-blue-100 text-blue-700' : 
+                                  'bg-gray-100 text-gray-600';
+
+                return `
+                    <div id="clip-${bookIdx}-${clipIdx}" class="p-4 border-b border-gray-100 last:border-0 transition-colors ${isActive ? 'bg-blue-50' : 'hover:bg-gray-50'} ${isLimitReached ? 'opacity-70' : ''}">
+                        <div class="flex flex-wrap items-center gap-4 text-xs font-medium text-gray-500 mb-0 uppercase tracking-wide">
+                            <span class="flex items-center gap-1 px-2 py-0.5 rounded-full ${typeColor}">
+                                ${clip.type}
+                            </span>
+                            ${clip.page ? `<span class="flex items-center gap-1"><i data-lucide="file-text" width="12"></i> Page ${clip.page}</span>` : ''}
+                            ${clip.locationString ? `<span class="flex items-center gap-1"><i data-lucide="map-pin" width="12"></i> Loc ${clip.locationString}</span>` : ''}
+                            <span class="flex items-center gap-1 ml-auto"><i data-lucide="calendar" width="12"></i> ${clip.dateStr}</span>
+                        </div>
+                        <div class="prose prose-sm max-w-none text-gray-800 leading-relaxed whitespace-pre-line pl-1 -mt-5">
+                            ${clip.content 
+                                ? (isLimitReached 
+                                    ? `<span class="italic text-red-500 flex items-center gap-2"><i data-lucide="alert-circle" width="14"></i>${this.escapeHtml(clip.content)}</span>` 
+                                    : this.escapeHtml(clip.content))
+                                : '<span class="italic text-gray-400">[No text content]</span>'
+                            }
+                        </div>
+                    </div>
+                `;
+            },
+
+            // --- Interactions ---
+
+            toggleBook(id) {
+                if (this.state.expandedBooks.has(id)) {
+                    this.state.expandedBooks.delete(id);
+                } else {
+                    this.state.expandedBooks.add(id);
+                }
+                this.updateUI();
+            },
+
+            toggleAll(expand) {
+                if (expand) {
+                    this.state.expandedBooks = new Set(this.state.parsedBooks.map(b => b.id));
+                } else {
+                    this.state.expandedBooks = new Set();
+                }
+                this.updateUI();
+            },
+
+            handleHeaderClick(id, index) {
+                if (!this.state.expandedBooks.has(id)) {
+                    this.toggleBook(id);
+                    this.state.activeIndex = { book: index, clip: -1 };
+                    this.updateUI(); // Needed to render selection border
+                    return;
+                }
+
+                const element = document.getElementById(`book-${index}`);
+                if (element) {
+                    const rect = element.getBoundingClientRect();
+                    // -60px threshold
+                    if (rect.top < -60) {
+                        const absoluteTop = window.scrollY + rect.top;
+                        window.scrollTo({ top: absoluteTop, behavior: 'smooth' });
+                        this.state.activeIndex = { book: index, clip: -1 };
+                        this.updateUI(); // Needed to render selection border
+                    } else {
+                        this.toggleBook(id);
+                    }
+                }
+            },
+
+            handleChevronClick(e, id) {
+                e.stopPropagation();
+                this.toggleBook(id);
+            },
+
+            manualScrollToBook(index) {
+                if (index < 0 || index >= this.state.parsedBooks.length) return;
+                this.state.activeIndex = { book: index, clip: -1 };
+                this.updateUI();
+                
+                // Trigger scroll
+                setTimeout(() => {
+                    const bookEl = document.getElementById(`book-${index}`);
+                    if (bookEl) {
+                        const rect = bookEl.getBoundingClientRect();
+                        const absoluteTop = window.scrollY + rect.top;
+                        window.scrollTo({ top: absoluteTop, behavior: 'smooth' });
+                    }
+                }, 50);
+            },
+
+            // --- File Output ---
+
+            formatBookContent(book) {
+                let text = `${book.title}\n${book.author}\n\n`;
+                text += `Total Clippings: ${book.clippings.length}\n`;
+                text += `=====================================\n\n`;
+                book.clippings.forEach((clip, index) => {
+                    text += `[${index + 1}] ${clip.type} | Page: ${clip.page || '?'} | Loc: ${clip.locationString || '?'} | ${clip.dateStr}\n`;
+                    text += `${clip.content}\n\n`;
+                    text += `-------------------------------------\n\n`;
+                });
+                return text;
+            },
+
+            handleDownload(e, index) {
+                e.stopPropagation();
+                const book = this.state.parsedBooks[index];
+                const content = this.formatBookContent(book);
+                const blob = new Blob([content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                const safeTitle = book.title.replace(/[^a-z0-9 ]/gi, '').substring(0, 50).trim();
+                const safeAuthor = book.author.replace(/[^a-z0-9 ]/gi, '').substring(0, 50).trim();
+                link.href = url;
+                link.download = `Clippings - ${safeAuthor} - ${safeTitle}.txt`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            },
+
+            handleCopy(e, index) {
+                e.stopPropagation();
+                const book = this.state.parsedBooks[index];
+                const content = this.formatBookContent(book);
+                
+                const textArea = document.createElement("textarea");
+                textArea.value = content;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                
+                try {
+                    document.execCommand('copy');
+                    this.showToast('Copied to clipboard!');
+                } catch (err) {
+                    alert("Failed to copy.");
+                }
+                document.body.removeChild(textArea);
+            },
+
+            showToast(msg) {
+                const toast = document.getElementById('toast');
+                toast.textContent = msg;
+                toast.classList.remove('opacity-0');
+                setTimeout(() => toast.classList.add('opacity-0'), 2000);
+            },
+
+            // --- Navigation ---
+
+            handleKeyDown(e) {
+                if (this.state.parsedBooks.length === 0) return;
+
+                let { book, clip } = this.state.activeIndex;
+                const parsedBooks = this.state.parsedBooks;
+                let preventDefault = false;
+
+                if (e.key === 'ArrowDown') {
+                    preventDefault = true;
+                    if (clip < parsedBooks[book].clippings.length - 1) {
+                        if (clip === -1) {
+                            this.state.expandedBooks.add(parsedBooks[book].id);
+                        }
+                        clip++;
+                    } else if (book < parsedBooks.length - 1) {
+                        book++;
+                        clip = -1;
+                    }
+                } else if (e.key === 'ArrowUp') {
+                    preventDefault = true;
+                    if (clip > -1) {
+                        clip--;
+                    } else if (book > 0) {
+                        book--;
+                        this.state.expandedBooks.add(parsedBooks[book].id);
+                        clip = parsedBooks[book].clippings.length - 1;
+                    }
+                } else if (e.key === 'PageDown') {
+                    preventDefault = true;
+                    if (book < parsedBooks.length - 1) {
+                        book++;
+                        clip = -1;
+                    }
+                } else if (e.key === 'PageUp') {
+                    preventDefault = true;
+                    if (book > 0) {
+                        book--;
+                        clip = -1;
+                    }
+                } else if (e.key === 'Home') {
+                    preventDefault = true;
+                    book = 0;
+                    clip = -1;
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                } else if (e.key === 'End') {
+                    preventDefault = true;
+                    book = parsedBooks.length - 1;
+                    clip = -1;
+                } else if (e.key === 'Enter') {
+                    // Added Enter key to expand/collapse current book if header is selected
+                    if (clip === -1) {
+                        preventDefault = true;
+                        const id = parsedBooks[book].id;
+                        if (this.state.expandedBooks.has(id)) {
+                            this.state.expandedBooks.delete(id);
+                        } else {
+                            this.state.expandedBooks.add(id);
+                        }
+                    }
+                }
+
+                if (preventDefault) {
+                    e.preventDefault();
+                    this.state.activeIndex = { book, clip };
+                    this.updateUI(); // Render selection
+                    this.scrollToActive();
+                }
+            },
+
+            scrollToActive() {
+                const { book, clip } = this.state.activeIndex;
+                setTimeout(() => {
+                    const headerEl = document.getElementById(`header-${book}`);
+                    
+                    if (clip === -1) {
+                        if (headerEl) {
+                             headerEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                    } else {
+                        const clipEl = document.getElementById(`clip-${book}-${clip}`);
+                        if (headerEl && clipEl) {
+                            const headerHeight = headerEl.getBoundingClientRect().height;
+                            const clipTop = clipEl.getBoundingClientRect().top + window.scrollY;
+                            window.scrollTo({
+                                top: clipTop - headerHeight,
+                                behavior: 'smooth'
+                            });
+                        }
+                    }
+                }, 50);
+            },
+
+            escapeHtml(text) {
+                if (!text) return '';
+                return text
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
+        };
+
+        // Start App
+        app.init();
+    </script>
+</body>
+</html>
