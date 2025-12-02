@@ -2,6 +2,8 @@
 
 A lightweight, single-page web application to parse, organize, and explore your Amazon Kindle highlights. This tool runs entirely in your browser using a single HTML file—no server, build steps, or installation required.
 
+Created using Gemini 3 Pro Canvas.
+
 ## 🚀 Features
 
 -   **Instant Parsing:** Drag and drop or select your `My Clippings.txt` file to instantly organize thousands of highlights.
