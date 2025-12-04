@@ -258,15 +258,20 @@
                         ? 'ring-2 ring-blue-500 border-blue-500' 
                         : 'border-gray-200';
 
+                    // FIX: Escape ID for use in inline onclick handlers (handles quotes/backslashes)
+                    const safeBookId = book.id
+                        .replace(/\\/g, "\\\\")
+                        .replace(/'/g, "\\'")
+                        .replace(/"/g, '&quot;');
+
                     html += `
                         <div id="book-${index}" class="bg-white rounded-xl shadow-sm border transition-shadow hover:shadow-md ${bookActiveBorder}">
                             <!-- Header -->
                             <div 
                                 id="header-${index}"
-                                onclick="app.handleHeaderClick('${book.id}', ${index})"
+                                onclick="app.handleHeaderClick('${safeBookId}', ${index})"
                                 class="sticky top-0 z-10 w-full flex items-center justify-between p-5 text-left bg-white hover:bg-gray-50 transition-colors cursor-pointer rounded-t-xl border-b border-gray-200 shadow-sm"
                             >
-                                <!-- FIXED: Added min-w-0 to allow truncation on long titles -->
                                 <div class="flex items-start gap-4 flex-1 min-w-0">
                                     <div class="p-2 rounded-lg ${isExpanded ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'}">
                                         <i data-lucide="book" width="24" height="24"></i>
@@ -299,7 +304,7 @@
                                         </button>
                                     </div>
 
-                                    <div onclick="app.handleChevronClick(event, '${book.id}')" class="flex items-center cursor-pointer p-2 rounded-lg hover:bg-gray-100">
+                                    <div onclick="app.handleChevronClick(event, '${safeBookId}')" class="flex items-center cursor-pointer p-2 rounded-lg hover:bg-gray-100">
                                         <span class="text-xs font-semibold bg-gray-100 text-gray-600 px-3 py-1 rounded-full whitespace-nowrap hidden lg:inline-block mr-2">
                                             ${book.clippings.length} clips
                                         </span>
